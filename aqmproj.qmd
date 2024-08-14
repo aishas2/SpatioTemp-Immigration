@@ -1,0 +1,767 @@
+---
+title: "South Asian Immigration (1996 - 2021) in Scarborough & Markham"
+author: "Aisha Syed"
+format: html
+toc: true
+embed-resources: true
+editor: visual
+bibliography: references.bib
+---
+
+Discriminatory immigration laws that significantly limited Asian immigration into Canada were lifted in the mid-1960's, causing a dramatic increase in the number of South Asian immigrants [@li2012]. After the mid-1960s, there have been major influxes of South Asian immigration in the the mid-1980s and the 1990s through skilled worker and refugee immigration pathways [@ghosh2014]. Recently, there have been efforts to dispel the myth of the South Asian monolith by acknowledging the different immigration contexts of various South Asian migrant groups [@walton-roberts2003]. Thus, I will analyze the migration of different South Asian ethnic groups in Scarborough and Markham, Ontario. More specifically, I will analyze the spatio-temporal clustering of Indian, Sri Lankan, Pakistani, and Bengali migration from 1996 to 2021. To do this, I will pull data from the Canadian census from the years 1996, 2001, 2006, 2016, and 2021. Data form 2011 will be excluded from the analysis due to bad data quality. In addition, Nepali immigrants are excluded from this study because they are not considered by the census until 2006. I only consider immigrants whose place of birth is any of the countries of interest.
+
+```{r}
+#| message: false
+#| warning: false
+#| include: false
+#| label: load libraries and set up environment
+
+library(tidyverse)
+library(fs)
+library(scales)
+library(cancensus)
+library(sf)
+library(tmap)
+library(modelsummary)
+library(DataExplorer)
+library(zoo)
+library(imputeTS)
+
+options(cancensus.api_key = "CensusMapper_f9ab9c536d9532418857bb70d03df16d")
+dir_create("./cache")
+options(cancensus.cache_path = "./cache")
+```
+
+```{r}
+#| include: false
+#| label: find census vectors
+
+m1 = find_census_vectors(
+  query = "Age",
+  dataset = "CA11",
+  # One of 'all' 'total' 'male' 'female'
+  type = "total",
+  query_type = "semantic"
+)
+
+Bangladesh_1996 = "v_CA1996_216" #recent only
+SriLanka_1996 = "v_CA1996_144"
+Pakistan_1996 = "v_CA1996_156"
+India_1996 = "v_CA1996_133"
+
+Bangladesh_2001 = "v_CA01_449"
+SriLanka_2001 = "v_CA01_420"
+Pakistan_2001 = "v_CA01_422"
+India_2001 = "v_CA01_410"
+
+Bangladesh_2006 = "v_CA06_2107"
+SriLanka_2006 = "v_CA06_2083"
+Pakistan_2006 = "v_CA06_2080"
+India_2006 = "v_CA06_2071"
+
+Bangladesh_2016 = "v_CA16_3585"
+SriLanka_2016 = "v_CA16_3618"
+Pakistan_2016 = "v_CA16_3612"
+India_2016 = "v_CA16_3594"
+
+Bangladesh_2021 = "v_CA21_4617"
+SriLanka_2021 = "v_CA21_4626"
+Pakistan_2021 = "v_CA21_4623"
+India_2021 = "v_CA21_4620"
+```
+
+```{r}
+#| label: find CSD region codes
+#| include: false
+
+#Amalgamation was in 1998, so we need to search something other than Toronto for 1996
+census_regions <- list_census_regions(dataset = 'CA01') |>
+  filter(level == "CSD")
+
+census_regions[grepl("Scarborough", census_regions$name),]$region
+census_regions[grepl("Markham", census_regions$name),]$region
+
+
+census_regions <- list_census_regions(dataset = 'CA01') |>
+  filter(level == "CSD")
+
+census_regions[grepl("Toronto", census_regions$name),]$region
+census_regions[grepl("Markham", census_regions$name),]$region
+
+
+census_regions <- list_census_regions(dataset = 'CA06') |>
+  filter(level == "CSD")
+
+census_regions[grepl("Toronto", census_regions$name),]$region
+census_regions[grepl("Markham", census_regions$name),]$region
+
+
+census_regions <- list_census_regions(dataset = 'CA16') |>
+  filter(level == "CSD")
+
+census_regions[grepl("Toronto", census_regions$name),]$region
+census_regions[grepl("Markham", census_regions$name),]$region
+
+census_regions <- list_census_regions(dataset = 'CA21') |>
+  filter(level == "CSD")
+
+census_regions[grepl("Toronto", census_regions$name),]$region
+census_regions[grepl("Markham", census_regions$name),]$region
+```
+
+```{r}
+#| label: retrieve census data
+#| include: false
+
+census96 <- get_census(
+  dataset = 'CA1996', 
+  regions = list(CSD = c("3520001", "3519036")),
+  vectors = c("Bangladesh_1996" = Bangladesh_1996,
+              "Pakistan_1996" = Pakistan_1996,
+              "SriLanka_1996" = SriLanka_1996,
+              "India_1996" = India_1996),
+  level = 'CT',
+  use_cache = TRUE,
+  geo_format = 'sf') |> 
+  st_transform(crs = 26917) # project to nad 1983 zone 17n
+
+census01 <- get_census(
+  dataset = 'CA01', 
+  regions = list(CSD = c("3520005", "3519036")),
+  vectors = c("Bangladesh_2001" = Bangladesh_2001,
+              "Pakistan_2001" = Pakistan_2001,
+              "SriLanka_2001" = SriLanka_2001,
+              "India_2001" = India_2001),
+  level = 'CT',
+  use_cache = TRUE,
+  geo_format = 'sf') |> 
+  st_transform(crs = 26917) # project to nad 1983 zone 17n
+
+census06 <- get_census(
+  dataset = 'CA06', 
+  regions = list(CSD = c("3520005", "3519036")),
+  vectors = c("Bangladesh_2006" = Bangladesh_2006,
+              "Pakistan_2006" = Pakistan_2006,
+              "SriLanka_2006" = SriLanka_2006,
+              "India_2006" = India_2006),
+  level = 'CT',
+  use_cache = TRUE,
+  geo_format = 'sf') |> 
+  st_transform(crs = 26917) # project to nad 1983 zone 17n
+
+
+census16 <- get_census(
+  dataset = 'CA16', 
+  regions = list(CSD = c("3520005", "3519036")),
+  vectors = c("Bangladesh_2016" = Bangladesh_2016,
+              "Pakistan_2016" = Pakistan_2016,
+              "SriLanka_2016" = SriLanka_2016,
+              "India_2016" = India_2016),
+  level = 'CT',
+  use_cache = TRUE,
+  geo_format = 'sf') |> 
+  st_transform(crs = 26917) # project to nad 1983 zone 17n
+
+
+census16 <- get_census(
+  dataset = 'CA16', 
+  regions = list(CSD = c("3520005", "3519036")),
+  vectors = c("Bangladesh_2016" = Bangladesh_2016,
+              "Pakistan_2016" = Pakistan_2016,
+              "SriLanka_2016" = SriLanka_2016,
+              "India_2016" = India_2016),
+  level = 'CT',
+  use_cache = TRUE,
+  geo_format = 'sf') |> 
+  st_transform(crs = 26917) # project to nad 1983 zone 17n
+
+census21 <- get_census(
+  dataset = 'CA21', 
+  regions = list(CSD = c("3520005", "3519036")),
+  vectors = c("Bangladesh_2021" = Bangladesh_2021,
+              "Pakistan_2021" = Pakistan_2021,
+              "SriLanka_2021" = SriLanka_2021,
+              "India_2021" = India_2021),
+  level = 'CT',
+  use_cache = TRUE,
+  geo_format = 'sf') |> 
+  st_transform(crs = 26917) # project to nad 1983 zone 17n
+```
+
+```{r}
+#| label: apportion data
+#| include: false 
+apportion = function(cw, df, year) {
+
+fields = c(
+  "Population",
+  "Dwellings", 
+  paste0("Pakistan_", year),
+  paste0("India_", year),
+  paste0("Bangladesh_", year),
+  paste0("SriLanka_", year)
+)
+
+cw$source_ctuid = as.character(cw$source_ctuid)
+cw$target_ctuid = as.character(cw$target_ctuid)
+
+merge_cw_df = inner_join(cw, df, by = c("source_ctuid" = "GeoUID"))
+
+output_fields = list()
+for (f in fields) {
+  wf = paste0("w_",f)
+  merge_cw_df[wf] = merge_cw_df["w_pop"] * merge_cw_df[f]
+  output_fields = append(output_fields, wf)
+} 
+
+d1 = merge_cw_df |> 
+  group_by(target_ctuid) |> 
+  summarise_if(
+    is.numeric,
+    sum) 
+
+output_fields = append(output_fields, "target_ctuid")
+output_c = unlist(output_fields)
+
+output_data = d1[,output_c] |> 
+  rename(GeoUID = target_ctuid)
+
+return(output_data)
+
+}
+
+i_census96 = apportion(read.csv("./data/ct_1996_2021.csv"), 
+             census96,
+             "1996")
+
+i_census01 = apportion(read.csv("./data/ct_2001_2021.csv"), 
+             census01,
+             "2001")
+
+i_census06 = apportion(read.csv("./data/ct_2006_2021.csv"), 
+             census06,
+             "2006")
+
+i_census16 = apportion(read.csv("./data/ct_2016_2021.csv"), 
+             census16,
+             "2016")
+
+i_census21 = census21 |> 
+  rename(w_Pakistan_2021 = Pakistan_2021,
+         w_India_2021 = India_2021,
+         w_Bangladesh_2021 = Bangladesh_2021,
+         w_SriLanka_2021 = SriLanka_2021,
+         w_Population = Population)
+```
+
+```{r}
+#| label: create immigration vars
+#| include: false
+
+imm_vars = function(df_test, year) {
+  
+fields = c(
+  paste0("w_Pakistan_", year),
+  paste0("w_India_", year),
+  paste0("w_Bangladesh_", year),
+  paste0("w_SriLanka_", year)
+)
+
+df_test[paste0("w_SouthAsian_", year)] = df_test[[fields[1]]] + df_test[[fields[2]]] + df_test[[fields[3]]] + df_test[[fields[4]]]
+
+df_test[paste0("w_PakistanPerc_", year)] = (df_test[[fields[1]]]/df_test[["w_Population"]])*100
+
+df_test[paste0("w_IndiaPerc_", year)] = (df_test[[fields[2]]]/df_test[["w_Population"]])*100
+
+df_test[paste0("w_BangladeshPerc_", year)] = (df_test[[fields[3]]]/df_test[["w_Population"]])*100
+
+df_test[paste0("w_SriLankaPerc_", year)] = (df_test[[fields[4]]]/df_test[["w_Population"]])*100
+
+df_test[paste0("w_SouthAsianPerc_", year)] = (df_test[[paste0("w_SouthAsian_", year)]] / df_test[["w_Population"]]) * 100
+
+return(df_test)
+}
+
+w_census96 = imm_vars(i_census96,
+             "1996")
+
+w_census01 = imm_vars(i_census01,
+             "2001")
+
+w_census06 = imm_vars(i_census06,
+             "2006")
+
+w_census16 = imm_vars(i_census16,
+             "2016")
+
+w_census21 = imm_vars(i_census21,
+             "2021")
+```
+
+```{r}
+#| label: correct potentially missing geoms
+#| include: false
+anti_join(w_census96, census21, by = "GeoUID")
+
+w_census96[w_census96$GeoUID == "5350330",]$GeoUID = "5350330.00"
+w_census96[w_census96$GeoUID == "5350352",]$GeoUID = "5350352.00"
+w_census96[w_census96$GeoUID == "5350378.2",]$GeoUID = "5350378.20"
+w_census96[w_census96$GeoUID == "5350400.2",]$GeoUID = "5350400.20"
+w_census96[w_census96$GeoUID == "5350401.2",]$GeoUID = "5350401.20"
+
+anti_join(w_census01, census21, by = "GeoUID")
+w_census01[w_census01$GeoUID == "5350400.2",]$GeoUID = "5350400.20"
+w_census01[w_census01$GeoUID == "5350401.2",]$GeoUID = "5350401.20"
+w_census01[w_census01$GeoUID == "5350403.1",]$GeoUID = "5350403.10"
+
+anti_join(w_census06, census21, by = "GeoUID")
+
+w_census06[w_census06$GeoUID == "5350400.2",]$GeoUID = "5350400.20"
+w_census06[w_census06$GeoUID == "5350401.2",]$GeoUID = "5350401.20"
+w_census06[w_census06$GeoUID == "5350403.1",]$GeoUID = "5350403.10"
+```
+
+```{r}
+#| label: join data 
+#| include: false
+
+df = left_join(w_census21, w_census96, by = "GeoUID") |> 
+  left_join(w_census01, by = "GeoUID") |> 
+  left_join(w_census06, by = "GeoUID") |> 
+  left_join(w_census16, by = "GeoUID") |> 
+  select(GeoUID,
+         w_Bangladesh_2021, w_Pakistan_2021, w_SriLanka_2021, w_India_2021,
+         w_BangladeshPerc_2021, w_PakistanPerc_2021, w_SriLankaPerc_2021,
+         w_IndiaPerc_2021, w_SouthAsianPerc_2021, w_SouthAsian_2021,
+
+         w_Bangladesh_2016, w_Pakistan_2016, w_SriLanka_2016, w_India_2016,
+         w_BangladeshPerc_2016, w_PakistanPerc_2016, w_SriLankaPerc_2016,
+         w_IndiaPerc_2016, w_SouthAsianPerc_2016, w_SouthAsian_2016,
+
+         w_Bangladesh_2006, w_Pakistan_2006, w_SriLanka_2006, w_India_2006,
+         w_BangladeshPerc_2006, w_PakistanPerc_2006, w_SriLankaPerc_2006,
+         w_IndiaPerc_2006, w_SouthAsianPerc_2006, w_SouthAsian_2006,
+
+         w_Bangladesh_2001, w_Pakistan_2001, w_SriLanka_2001, w_India_2001,
+         w_BangladeshPerc_2001, w_PakistanPerc_2001, w_SriLankaPerc_2001,
+         w_IndiaPerc_2001, w_SouthAsianPerc_2001, w_SouthAsian_2001,
+
+         w_Bangladesh_1996, w_Pakistan_1996, w_SriLanka_1996, w_India_1996,
+         w_BangladeshPerc_1996, w_PakistanPerc_1996, w_SriLankaPerc_1996,
+         w_IndiaPerc_1996, w_SouthAsianPerc_1996, w_SouthAsian_1996)
+
+#Data is in short format. We will keep it like this for visualization so every row is a geographic object. When we start analysis, then we will convert it to long format.
+```
+
+```{r}
+#| label: clean col names
+#| include: false
+names(df) = sub('^w_', '', names(df))
+
+new_order = sort(colnames(df))
+df = df[, new_order]
+```
+
+```{r}
+#| label: define geometry for area of interest
+#| include: false
+scarbo = st_read("./data/toronto_muni.gpkg") |> 
+  st_transform(crs = 26917) |> # project to nad 1983 zone 17n 
+  filter(area_name == "SCARBOROUGH") 
+
+markham <- get_census(
+  dataset = 'CA21', 
+  regions = list(CSD = c("3519036")),
+  level = 'CT',
+  use_cache = TRUE,
+  geo_format = 'sf') |> 
+  st_transform(crs = 26917) # project to nad 1983 zone 17n
+
+area = st_union(markham, scarbo) |> 
+  select(geometry) |> 
+  st_union() |> 
+  st_sf() |> 
+  rename(geometry = st_union.select.st_union.markham..scarbo...geometry..)
+```
+
+```{r}
+#| label: spatial filter
+#| include: false
+
+df = st_filter(df, area, .predicate = st_within)
+```
+
+```{r}
+#| label: interpolate NA values using linear method
+#| include: false
+df = df |> 
+  mutate(Bangladesh_1996 = na_interpolation(df$Bangladesh_1996),
+         Bangladesh_2001 = na_interpolation(df$Bangladesh_2001),
+         Bangladesh_2006 = na_interpolation(df$Bangladesh_2006),
+         Bangladesh_2016 = na_interpolation(df$Bangladesh_2016),
+         Bangladesh_2021 = na_interpolation(df$Bangladesh_2021),
+         
+         India_1996 = na_interpolation(df$India_1996),
+         India_2001 = na_interpolation(df$India_2001),
+         India_2006 = na_interpolation(df$India_2006),
+         India_2016 = na_interpolation(df$India_2016),
+         India_2021 = na_interpolation(df$India_2021),
+         
+         Pakistan_1996 = na_interpolation(df$Pakistan_1996),
+         Pakistan_2001 = na_interpolation(df$Pakistan_2001),
+         Pakistan_2006 = na_interpolation(df$Pakistan_2006),
+         Pakistan_2016 = na_interpolation(df$Pakistan_2016),
+         Pakistan_2021 = na_interpolation(df$Pakistan_2021),
+         
+         SriLanka_1996 = na_interpolation(df$SriLanka_1996),
+         SriLanka_2001 = na_interpolation(df$SriLanka_2001),
+         SriLanka_2006 = na_interpolation(df$SriLanka_2006),
+         SriLanka_2016 = na_interpolation(df$SriLanka_2016),
+         SriLanka_2021 = na_interpolation(df$SriLanka_2021),
+         
+         SouthAsian_1996 = na_interpolation(df$SouthAsian_1996),
+         SouthAsian_2001 = na_interpolation(df$SouthAsian_2001),
+         SouthAsian_2006 = na_interpolation(df$SouthAsian_2006),
+         SouthAsian_2016 = na_interpolation(df$SouthAsian_2016),
+         SouthAsian_2021 = na_interpolation(df$SouthAsian_2021))
+
+#export
+write.csv(df, "C:/Users/aisha/OneDrive/Desktop/AQM/Project/AQM_Project/data/popdf_96_21.csv")
+```
+
+```{r}
+#| label: create non-spatial dataframe for analysis
+#| include: false
+
+#transpose data so rows are time and columns are regions
+# ndf = as.data.frame(data) |> 
+#   st_drop_geometry() |>
+#   select(-GeoUID)
+# 
+# rownames(ndf) = df$GeoUID
+# 
+# ndf = ndf |> 
+#   t()
+#   
+# ndf = ndf[!(row.names(ndf) %in% "geometry"), ]
+```
+
+I standardized all census tracts to the 2021 census tract geometry using a weighing factor to adjust the values across all variables and filtered them to Scarborough and Markham.
+
+```{r}
+#| label: plot census geometries
+#| fig-cap: Apportioned Census Tracts (1996 - 2021)
+#| warning: false
+#| echo: false
+tm_shape(area) + tm_fill(col = "darkgray") +
+  tm_shape(df) + tm_polygons(col = "lightgray", border.col = "black") +
+  tm_layout(title = "Apportioned Census Tracts",
+            title.size = 0.7,
+            title.position = c("left", "bottom"))
+```
+
+It looks like some census tracts get lost through the process of apportioning past census tracts to the most current 2021 census tracts.
+
+```{r}
+#| tbl-cap: Descriptive Statistics South Asian Immigrant Data
+#| echo: false
+#| label: data summary table
+#| warning: false
+datasummary_skim(df, output = "gt")
+```
+
+All variables have a right skew, so I may need to log all of the variables. The Bengali immigrant percentage increased every period, increasing the most between 2016 and 2021. The Indian immigrant percentage increased every period, increasing the most between 2001 and 2006. The Pakistani immigrant percentage increased every period, increasing the most between 1996 and 2001, and decreased between 2006 and 2016. The Sri Lankan immigrant percentage increased every period, increasing the most between 2001 and 2006. The overall South Asian immigrant percentage increased every period, increasing the most between 2001 and 2006.
+
+Next, I will draw upon a spatio-temporal retrospective clustering method that tests for a change point where the data across regions change the most. I will pair this with Global Moran's I tests to test for clustering across space and time.
+
+# Analysis
+
+```{r}
+#| label: Retrospective Detection Change in Multinomial probabilities function
+#| include: false
+
+SpatTempRetro = function(data) {
+n = nrow(data) #number of time periods
+m = ncol(data) - 1 #number of regions
+
+#first calc exp freqs
+exp_tab = suppressWarnings(chisq.test(data)$expected)
+
+#creat chi-sq stat
+Q2 = suppressWarnings(chisq.test(data, exp_tab)[["statistic"]][["X-squared"]])
+
+#get pvals
+pvals = c()
+
+for (r in 1:(n-1)) {
+
+    t_obs = matrix(1:(2*(m+1)), ncol = ncol(data))
+  
+    for(j in 1:ncol(t_obs)) {
+          top_val = cumsum(data[,j])[r]
+          bottom_val = colSums(data)[j] - cumsum(data[,j])[r]
+          t_obs[1,j] = top_val
+          t_obs[2,j] = bottom_val
+    }
+  
+
+  t_exp = matrix(1:(2*(m+1)), ncol = ncol(exp_tab))
+  
+    for(j in 1:ncol(t_exp)) {
+          top_val = cumsum(exp_tab[,j])[r]
+          bottom_val = colSums(exp_tab)[j] - cumsum(exp_tab[,j])[r]
+          t_exp[1,j] = top_val
+          t_exp[2,j] = bottom_val
+    }
+
+  Qr = suppressWarnings(chisq.test(t_obs, t_exp)[["statistic"]][["X-squared"]])
+  num = Q2 - Qr
+  dem = (n-2)*m
+  sig = num/dem
+  K2 = Qr / sig
+  val = K2/m
+  pval = pf(val, m, (n-2)*m, lower.tail = FALSE)
+  pvals = append(pvals, pval)
+}
+
+change_point = which(pvals == min(pvals))
+
+result_tab = matrix(rep(NA, (n-1)*3), ncol = 3)
+rownames(result_tab) = head(rownames(data), -1)
+colnames(result_tab) = c("p-value", "sig", "minimum p-value?")
+
+for(i in 1:nrow(result_tab)) {
+  result_tab[i,1] = format(pvals[i], digits = 3)
+  if (change_point == i){
+    result_tab[i,3] = "YES"
+  } else {
+     result_tab[i,3] = ""
+  }
+  
+  if (pvals[i] < 0.01){
+    result_tab[i,2] = "**"
+  } else if (pvals[i] < 0.05){
+    result_tab[i,2] = "*"
+  } else if (pvals[i] < 0.1){
+    result_tab[i,2] = "+"
+  } else {
+    result_tab[i,2] = ""
+  }
+}
+
+return(result_tab)
+}
+```
+
+```{r}
+#| label: read in transposed dataframe and prepare data for analysis
+#| include: false
+tdf = read.csv("C:/Users/aisha/OneDrive/Desktop/AQM/Project/AQM_Project/data/pop96_21.csv")
+
+rownames(tdf) = tdf$GeoUID
+
+tdf = tdf |> 
+  select(-GeoUID)
+
+SL_num = tdf[grepl("SriLanka_", rownames(tdf)),] |> 
+  select(-X5350402.01, -X5350402.03, -X5350402.05)
+
+IN_num = tdf[grepl("India_", rownames(tdf)),]
+
+PK_num = tdf[grepl("Pakistan_", rownames(tdf)),] |> 
+  select(-X5350400.07)
+
+BA_num = tdf[grepl("Bangladesh_", rownames(tdf)),] |> 
+  select(-X5350376.05, -X5350376.13, -X5350377.02, -X5350377.06, -X5350377.07, -X5350378.21, -X5350400.03, -X5350400.04, -X5350400.06, -X5350400.07, -X5350400.15, -X5350401.05, -X5350401.07, -X5350401.08, -X5350401.13, -X5350401.15, -X5350401.17,  -X5350401.2, -X5350401.21, -X5350402.03, -X5350402.04, -X5350402.05, -X5350402.06, -X5350402.07, -X5350402.09,  -X5350402.1, -X5350402.13, -X5350403.01, -X5350403.04, -X5350403.15 )
+```
+
+```{r}
+#| warning: false
+SpatTempRetro(SL_num)
+```
+
+```{r}
+SpatTempRetro(IN_num)
+```
+
+```{r}
+SpatTempRetro(PK_num)
+```
+
+```{r}
+#| warning: false
+SpatTempRetro(BA_num)
+```
+
+# Moran's I
+
+```{r}
+#| label: compute Moran's I over time
+#| echo: false
+nb_queen <- sfdep::st_contiguity(df, queen = TRUE)
+
+queen_W <- sfdep::st_weights(
+  nb = nb_queen, 
+  style = "W")
+
+SL96_GMoran = sfdep::global_moran_test(
+  x = df |> pull(SriLanka_1996),
+  nb = nb_queen,
+  wt = queen_W)
+SL01_GMoran = sfdep::global_moran_test(
+  x = df |> pull(SriLanka_2001),
+  nb = nb_queen,
+  wt = queen_W)
+SL06_GMoran = sfdep::global_moran_test(
+  x = df |> pull(SriLanka_2006),
+  nb = nb_queen,
+  wt = queen_W)
+SL16_GMoran = sfdep::global_moran_test(
+  x = df |> pull(SriLanka_2016),
+  nb = nb_queen,
+  wt = queen_W)
+SL21_GMoran = sfdep::global_moran_test(
+  x = df |> pull(SriLanka_2021),
+  nb = nb_queen,
+  wt = queen_W)
+
+IN96_GMoran = sfdep::global_moran_test(
+  x = df |> pull(India_1996),
+  nb = nb_queen,
+  wt = queen_W)
+IN01_GMoran = sfdep::global_moran_test(
+  x = df |> pull(India_2001),
+  nb = nb_queen,
+  wt = queen_W)
+IN06_GMoran = sfdep::global_moran_test(
+  x = df |> pull(India_2006),
+  nb = nb_queen,
+  wt = queen_W)
+IN16_GMoran = sfdep::global_moran_test(
+  x = df |> pull(India_2016),
+  nb = nb_queen,
+  wt = queen_W)
+IN21_GMoran = sfdep::global_moran_test(
+  x = df |> pull(India_2021),
+  nb = nb_queen,
+  wt = queen_W)
+
+PK96_GMoran = sfdep::global_moran_test(
+  x = df |> pull(Pakistan_1996),
+  nb = nb_queen,
+  wt = queen_W)
+PK01_GMoran = sfdep::global_moran_test(
+  x = df |> pull(Pakistan_2001),
+  nb = nb_queen,
+  wt = queen_W)
+PK06_GMoran = sfdep::global_moran_test(
+  x = df |> pull(Pakistan_2006),
+  nb = nb_queen,
+  wt = queen_W)
+PK16_GMoran = sfdep::global_moran_test(
+  x = df |> pull(Pakistan_2016),
+  nb = nb_queen,
+  wt = queen_W)
+PK21_GMoran = sfdep::global_moran_test(
+  x = df |> pull(Pakistan_2021),
+  nb = nb_queen,
+  wt = queen_W)
+
+BA96_GMoran = sfdep::global_moran_test(
+  x = df |> pull(Bangladesh_1996),
+  nb = nb_queen,
+  wt = queen_W)
+BA01_GMoran = sfdep::global_moran_test(
+  x = df |> pull(Bangladesh_2001),
+  nb = nb_queen,
+  wt = queen_W)
+BA06_GMoran = sfdep::global_moran_test(
+  x = df |> pull(Bangladesh_2006),
+  nb = nb_queen,
+  wt = queen_W)
+BA16_GMoran = sfdep::global_moran_test(
+  x = df |> pull(Bangladesh_2016),
+  nb = nb_queen,
+  wt = queen_W)
+BA21_GMoran = sfdep::global_moran_test(
+  x = df |> pull(Bangladesh_2021),
+  nb = nb_queen,
+  wt = queen_W)
+
+#make a table
+tab = matrix(NA, ncol=3, nrow = 20)
+colnames(tab) <- c("Moran's I", 'p-value', "")
+rownames(tab) = c("Sri Lanka 1996", 
+                  "Sri Lanka 2001", 
+                  "Sri Lanka 2006", 
+                  "Sri Lanka 2016",
+                  "Sri Lanka 2021",
+                  "India 1996", 
+                  "India 2001", 
+                  "India 2006", 
+                  "India 2016",
+                  "India 2021",
+                  "Pakistan 1996", 
+                  "Pakistan 2001", 
+                  "Pakistan 2006", 
+                  "Pakistan 2016",
+                  "Pakistan 2021",
+                  "Bangladesh 1996", 
+                  "Bangladesh 2001", 
+                  "Bangladesh 2006", 
+                  "Bangladesh 2016",
+                  "Bangladesh 2021")
+
+#[row, col]
+tab[1,1] = round(SL96_GMoran$estimate |> pluck("Moran I statistic"),2) |> 
+  format(nsmall = 2)
+tab[2,1] = round(SL01_GMoran$estimate |> pluck("Moran I statistic"),2)
+tab[3,1] = round(SL06_GMoran$estimate |> pluck("Moran I statistic"), 2)
+tab[4,1] = round(SL16_GMoran$estimate |> pluck("Moran I statistic"), 2)
+tab[5,1] = round(SL21_GMoran$estimate |> pluck("Moran I statistic"),2)
+
+tab[6,1] = round(IN96_GMoran$estimate |> pluck("Moran I statistic"),2)
+tab[7,1] = round(IN01_GMoran$estimate |> pluck("Moran I statistic"), 2)
+tab[8,1] = round(IN06_GMoran$estimate |> pluck("Moran I statistic"), 2)
+tab[9,1] = round(IN16_GMoran$estimate |> pluck("Moran I statistic"),2)
+tab[10,1] = round(IN21_GMoran$estimate |> pluck("Moran I statistic"),2)
+
+tab[11,1] = round(PK96_GMoran$estimate |> pluck("Moran I statistic"), 2)
+tab[12,1] = round(PK01_GMoran$estimate |> pluck("Moran I statistic"), 2)
+tab[13,1] = round(PK06_GMoran$estimate |> pluck("Moran I statistic"),2) 
+tab[14,1] = round(PK16_GMoran$estimate |> pluck("Moran I statistic"),2)
+tab[15,1] = round(PK21_GMoran$estimate |> pluck("Moran I statistic"), 2)
+
+tab[16,1] = round(BA96_GMoran$estimate |> pluck("Moran I statistic"), 2)
+tab[17,1] = round(BA01_GMoran$estimate |> pluck("Moran I statistic"),2)
+tab[18,1] = round(BA06_GMoran$estimate |> pluck("Moran I statistic"),2)
+tab[19,1] = round(BA16_GMoran$estimate |> pluck("Moran I statistic"), 2)
+tab[20,1] = round(BA21_GMoran$estimate |> pluck("Moran I statistic"), 2)
+
+tab[1,2] = format(SL96_GMoran$p.value, digits = 3) 
+tab[2,2] = format(SL01_GMoran$p.value, digits = 3)
+tab[3,2] = format(SL06_GMoran$p.value, digits = 3)
+tab[4,2] = format(SL16_GMoran$p.value, digits = 3)
+tab[5,2] = format(SL21_GMoran$p.value, digits = 3) 
+
+tab[6,2] = format(IN96_GMoran$p.value, digits = 3)
+tab[7,2] = format(IN01_GMoran$p.value, digits = 3)
+tab[8,2] = format(IN06_GMoran$p.value, digits = 3)
+tab[9,2] = format(IN16_GMoran$p.value, digits = 3) 
+tab[10,2] = format(IN21_GMoran$p.value, digits = 3)
+
+tab[11,2] = format(PK96_GMoran$p.value, digits = 3)
+tab[12,2] = format(PK01_GMoran$p.value, digits = 3)
+tab[13,2] = format(PK06_GMoran$p.value, digits = 3) 
+tab[14,2] = format(PK16_GMoran$p.value, digits = 3)
+tab[15,2] = format(PK21_GMoran$p.value, digits = 3)
+
+tab[16,2] = format(BA96_GMoran$p.value, digits = 3)
+tab[17,2] = format(BA01_GMoran$p.value, digits = 3) 
+tab[18,2] = format(BA06_GMoran$p.value, digits = 3)
+tab[19,2] = format(BA16_GMoran$p.value, digits = 3)
+tab[20,2] = format(BA21_GMoran$p.value, digits = 3)
+
+tab <- as.table(tab)
+tab
+```
